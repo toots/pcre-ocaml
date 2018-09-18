@@ -78,8 +78,8 @@ struct cod {
 };
 
 /* Cache for exceptions */
-static value *pcre_exc_Error         = NULL;  /* Exception [Error] */
-static value *pcre_exc_Backtrack     = NULL;  /* Exception [Backtrack] */
+static caml_root pcre_exc_Error         = NULL;  /* Exception [Error] */
+static caml_root pcre_exc_Backtrack     = NULL;  /* Exception [Backtrack] */
 
 /* Cache for polymorphic variants */
 static value var_Start_only;   /* Variant [`Start_only] */
@@ -145,8 +145,6 @@ static int pcre_callout_handler(pcre_callout_block* cb)
     value v_res;
 
     /* Set up parameter array */
-    value v_callout_data = caml_alloc_small(8, 0);
-
     const value v_substrings = *cod->v_substrings_p;
 
     const int capture_top = cb->capture_top;
@@ -154,19 +152,20 @@ static int pcre_callout_handler(pcre_callout_block* cb)
     const int subgroups2_1 = subgroups2 - 1;
 
     const int *ovec_src = cb->offset_vector + subgroups2_1;
-    ovec_dst_ptr ovec_dst = &Field(Field(v_substrings, 1), 0) + subgroups2_1;
+    ovec_dst_ptr ovec_dst = &(Op_val(Field_imm(v_substrings, 1))[0]) + subgroups2_1;
     long subj_start = cod->subj_start;
 
     copy_ovector(subj_start, ovec_src, ovec_dst, subgroups2);
 
-    Field(v_callout_data, 0) = Val_int(cb->callout_number);
-    Field(v_callout_data, 1) = v_substrings;
-    Field(v_callout_data, 2) = Val_int(cb->start_match + subj_start);
-    Field(v_callout_data, 3) = Val_int(cb->current_position + subj_start);
-    Field(v_callout_data, 4) = Val_int(capture_top);
-    Field(v_callout_data, 5) = Val_int(cb->capture_last);
-    Field(v_callout_data, 6) = Val_int(cb->pattern_position);
-    Field(v_callout_data, 7) = Val_int(cb->next_item_length);
+    value v_callout_data = caml_alloc_8(0,
+      Val_int(cb->callout_number),
+      v_substrings,
+      Val_int(cb->start_match + subj_start),
+      Val_int(cb->current_position + subj_start),
+      Val_int(capture_top),
+      Val_int(cb->capture_last),
+      Val_int(cb->pattern_position),
+      Val_int(cb->next_item_length));
 
     /* Perform callout */
     v_res = caml_callback_exn(*cod->v_cof_p, v_callout_data);
@@ -174,7 +173,7 @@ static int pcre_callout_handler(pcre_callout_block* cb)
     if (Is_exception_result(v_res)) {
       /* Callout raised an exception */
       const value v_exn = Extract_exception(v_res);
-      if (Field(v_exn, 0) == *pcre_exc_Backtrack) return 1;
+      if (Field_imm(v_exn, 0) == caml_read_root(pcre_exc_Backtrack)) return 1;
       cod->v_exn = v_exn;
       return PCRE_ERROR_CALLOUT;
     }
@@ -187,8 +186,8 @@ static int pcre_callout_handler(pcre_callout_block* cb)
    calculates + caches the variant hash values */
 CAMLprim value pcre_ocaml_init(value __unused v_unit)
 {
-  pcre_exc_Error     = caml_named_value("Pcre.Error");
-  pcre_exc_Backtrack = caml_named_value("Pcre.Backtrack");
+  pcre_exc_Error     = caml_named_root("Pcre.Error");
+  pcre_exc_Backtrack = caml_named_root("Pcre.Backtrack");
 
   var_Start_only  = caml_hash_variant("Start_only");
   var_ANCHORED    = caml_hash_variant("ANCHORED");
@@ -259,7 +258,7 @@ static inline void raise_internal_error(char *msg)
 CAMLnoreturn_end;
 
 static inline void raise_pcre_error(value v_arg)
-{ caml_raise_with_arg(*pcre_exc_Error, v_arg); }
+{ caml_raise_with_arg(caml_read_root(pcre_exc_Error), v_arg); }
 
 static inline void raise_partial() { raise_pcre_error(Val_int(0)); }
 static inline void raise_bad_partial() { raise_pcre_error(Val_int(1)); }
@@ -274,9 +273,7 @@ static inline void raise_bad_pattern(const char *msg, int pos)
   CAMLlocal1(v_msg);
   value v_arg;
   v_msg = caml_copy_string(msg);
-  v_arg = caml_alloc_small(2, 0);
-  Field(v_arg, 0) = v_msg;
-  Field(v_arg, 1) = Val_int(pos);
+  v_arg = caml_alloc_2(0, v_msg, Val_int(pos));
   raise_pcre_error(v_arg);
   CAMLnoreturn;
 }
@@ -287,8 +284,7 @@ static inline void raise_internal_error(char *msg)
   CAMLlocal1(v_msg);
   value v_arg;
   v_msg = caml_copy_string(msg);
-  v_arg = caml_alloc_small(1, 1);
-  Field(v_arg, 0) = v_msg;
+  v_arg = caml_alloc_1(1, v_msg);;
   raise_pcre_error(v_arg);
   CAMLnoreturn;
 }
@@ -317,7 +313,7 @@ CAMLprim value pcre_compile_stub(intnat v_opt, value v_tables, value v_pat)
   /* If v_tables = [None], then pointer to tables is NULL, otherwise
      set it to the appropriate value */
   chartables tables =
-    (v_tables == None) ? NULL : get_tables(Field(v_tables, 0));
+    (v_tables == None) ? NULL : get_tables(Field_imm(v_tables, 0));
 
   /* Compiles the pattern */
   pcre *regexp = pcre_compile(String_val(v_pat), v_opt, &error,
@@ -369,8 +365,7 @@ CAMLprim value pcre_get_match_limit_recursion_stub(value v_rex)
   if (extra == NULL) return None;
   if (extra->flags & PCRE_EXTRA_MATCH_LIMIT_RECURSION) {
     value v_lim = Val_int(extra->match_limit_recursion);
-    value v_res = caml_alloc_small(1, 0);
-    Field(v_res, 0) = v_lim;
+    value v_res = caml_alloc_1(0, v_lim);
     return v_res;
   }
   return None;
@@ -383,8 +378,7 @@ CAMLprim value pcre_get_match_limit_stub(value v_rex)
   if (extra == NULL) return None;
   if (extra->flags & PCRE_EXTRA_MATCH_LIMIT) {
     value v_lim = Val_int(extra->match_limit);
-    value v_res = caml_alloc_small(1, 0);
-    Field(v_res, 0) = v_lim;
+    value v_res = caml_alloc_1(0, v_lim);
     return v_res;
   }
   return None;
@@ -485,9 +479,7 @@ CAMLprim value pcre_firstbyte_stub(value v_rex)
         value v_firstbyte;
         /* Allocates the non-constant constructor [`Char of char] and fills
            in the appropriate value */
-        v_firstbyte = caml_alloc_small(2, 0);
-        Field(v_firstbyte, 0) = var_Char;
-        Field(v_firstbyte, 1) = Val_int(firstbyte);
+        v_firstbyte = caml_alloc_2(0, var_Char, Val_int(firstbyte));;
         return v_firstbyte;
       }
   }
@@ -517,10 +509,8 @@ CAMLprim value pcre_firsttable_stub(value v_rex)
 
     Begin_roots1(v_res_str);
       /* Allocates [Some string] from firsttable */
-      v_res = caml_alloc_small(1, 0);
+      v_res = caml_alloc_1(0, v_res_str);
     End_roots();
-
-    Field(v_res, 0) = v_res_str;
 
     return v_res;
   }
@@ -538,8 +528,7 @@ CAMLprim value pcre_lastliteral_stub(value v_rex)
   if (lastliteral < 0) raise_internal_error("pcre_lastliteral_stub");
   else {
     /* Allocates [Some char] */
-    value v_res = caml_alloc_small(1, 0);
-    Field(v_res, 0) = Val_int(lastliteral);
+    value v_res = caml_alloc_1(0, Val_int(lastliteral));;
     return v_res;
   }
 }
@@ -581,7 +570,7 @@ static inline void handle_exec_error(char *loc, const int ret)
 static inline void handle_pcre_exec_result(
   int *ovec, value v_ovec, long ovec_len, long subj_start, int ret)
 {
-  ovec_dst_ptr ocaml_ovec = (ovec_dst_ptr) &Field(v_ovec, 0);
+  ovec_dst_ptr ocaml_ovec = (ovec_dst_ptr) &(Op_val(v_ovec)[0]);
   const int subgroups2 = ret * 2;
   const int subgroups2_1 = subgroups2 - 1;
   const int *ovec_src = ovec + subgroups2_1;
@@ -626,7 +615,7 @@ CAMLprim value pcre_exec_stub(
 
     /* Special case when no callout functions specified */
     if (v_maybe_cof == None) {
-      int *ovec = (int *) &Field(v_ovec, 0);
+      int *ovec = (int *) &(Op_val(v_ovec)[0]);
 
       /* Performs the match */
       ret = pcre_exec(code, extra, ocaml_subj, len, pos, opt, ovec, ovec_len);
@@ -637,7 +626,7 @@ CAMLprim value pcre_exec_stub(
 
     /* There are callout functions */
     else {
-      value v_cof = Field(v_maybe_cof, 0);
+      value v_cof = Field_imm(v_maybe_cof, 0);
       value v_substrings;
       char *subj = caml_stat_alloc(sizeof(char) * len);
       int *ovec = caml_stat_alloc(sizeof(int) * ovec_len);
@@ -662,11 +651,8 @@ CAMLprim value pcre_exec_stub(
 
       Begin_roots4(v_rex, v_cof, v_substrings, v_ovec);
         Begin_roots1(v_subj);
-          v_substrings = caml_alloc_small(2, 0);
+          v_substrings = caml_alloc_2(0, v_subj, v_ovec);
         End_roots();
-
-        Field(v_substrings, 0) = v_subj;
-        Field(v_substrings, 1) = v_ovec;
 
         cod.v_substrings_p = &v_substrings;
         cod.v_cof_p = &v_cof;
